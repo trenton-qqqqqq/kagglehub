@@ -2,6 +2,7 @@ from collections.abc import Callable
 from typing import Any
 
 from kagglehub import registry
+from kagglehub.exceptions import UnauthenticatedError
 from kagglehub.handle import ResourceHandle
 from kagglehub.resolver import Resolver
 from tests.fixtures import BaseTestCase
@@ -35,6 +36,14 @@ def fail_fn(*_, **__) -> tuple[str, int | None]:  # noqa: ANN002, ANN003
     raise AssertionError(msg)
 
 
+def auth_fail_fn(*_, **__) -> tuple[str, int | None]:  # noqa: ANN002, ANN003
+    raise UnauthenticatedError()
+
+
+def auth_fail_support_fn(*_, **__) -> bool:  # noqa: ANN002, ANN003
+    raise UnauthenticatedError()
+
+
 class RegistryTest(BaseTestCase):
     def test_calls_only_supported(self) -> None:
         r = registry.MultiImplRegistry[FakeHandle]("test")
@@ -59,3 +68,29 @@ class RegistryTest(BaseTestCase):
         r.add_implementation(FakeImpl(lambda *_, **__: False, fail_fn))
 
         self.assertRaisesRegex(RuntimeError, r"Missing implementation", r, SOME_VALUE)
+
+    def test_falls_back_when_supported_impl_has_auth_failure(self) -> None:
+        r = registry.MultiImplRegistry[FakeHandle]("test")
+        r.add_implementation(FakeImpl(lambda *_, **__: True, lambda *_, **__: SOME_VALUE))
+        r.add_implementation(FakeImpl(lambda *_, **__: True, auth_fail_fn))
+
+        val = r(FakeHandle())
+
+        self.assertEqual(SOME_VALUE, val)
+
+    def test_falls_back_when_is_supported_has_auth_failure(self) -> None:
+        r = registry.MultiImplRegistry[FakeHandle]("test")
+        r.add_implementation(FakeImpl(lambda *_, **__: True, lambda *_, **__: SOME_VALUE))
+        r.add_implementation(FakeImpl(auth_fail_support_fn, fail_fn))
+
+        val = r(FakeHandle())
+
+        self.assertEqual(SOME_VALUE, val)
+
+    def test_raises_auth_error_when_all_fallbacks_fail_auth(self) -> None:
+        r = registry.MultiImplRegistry[FakeHandle]("test")
+        r.add_implementation(FakeImpl(lambda *_, **__: True, auth_fail_fn))
+        r.add_implementation(FakeImpl(auth_fail_support_fn, fail_fn))
+
+        with self.assertRaises(UnauthenticatedError):
+            r(FakeHandle())
